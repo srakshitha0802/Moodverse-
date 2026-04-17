@@ -1,0 +1,20 @@
+node_modules/
+.expo/
+dist/
+*.log
+.DS_Store
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+metro-cache-*
+.expo-shared/assets
+assets/VR Rooms/*.mp4
+logs.txt
+current_lint.json
+eslint*.json
+temp_lint.json
+package-lock.json.backup
+package.json.backup
+metro*.log
+.expo/
+
