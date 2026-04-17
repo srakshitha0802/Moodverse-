@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "ModernApp",
+    "slug": "modernapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "bundleIdentifier": "com.modernapp.app",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Camera is used for mood scanning and wellness features.",
+        "NSMicrophoneUsageDescription": "Microphone is used for voice-based wellness features.",
+        "NSPhotoLibraryUsageDescription": "Photo library access is used when you choose to share images."
+      }
+    },
+    "android": {
+      "package": "com.modernapp.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.VIBRATE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#ffffff"
+        }
+      ],
+      "expo-secure-store",
+      "expo-image-picker",
+      "expo-camera",
+      "expo-splash-screen",
+      "expo-build-properties"
+    ],
+    "scheme": "modernapp"
+  }
+}

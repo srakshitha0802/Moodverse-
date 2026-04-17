@@ -1,0 +1,798 @@
+{
+  "analysis_metadata": {
+    "timestamp": "2026-04-05",
+    "app_name": "ModernApp (React Native Expo)",
+    "scope": "Complete mood data flow analysis",
+    "critical_issues_count": 8,
+    "major_issues_count": 7,
+    "minor_issues_count": 5
+  },
+  "data_flow_overview": {
+    "description": "MoodScanner captures multimodal mood data → moodProcessor analyzes → storage.saveMood persists → getMoodHistory loads",
+    "entry_point": "components/MoodScanner.js::processMoodAnalysis()",
+    "exit_point": "utils/storage.js::saveMood() & getMoodHistory()",
+    "storage_backend": "utils/storage.js (AdvancedStorage) → AsyncStorage"
+  },
+  "issue_categories": {
+    "1_data_structure_mismatches": [
+      {
+        "severity": "CRITICAL",
+        "title": "Score Property Name Inconsistency",
+        "description": "moodProcessor.analyzeMultiModal() returns 'score' as 'stabilityScore' but other code expects 'score'",
+        "location_saved": {
+          "file": "components/MoodScanner.js",
+          "line": 519,
+          "code": "await storage.saveMood(analysis);",
+          "context": "analysis object contains: score (stabilityScore from moodProcessor)"
+        },
+        "location_loaded": {
+          "file": "components/MoodScanner.js",
+          "line": 489,
+          "code": "const previousMoods = await storage.getMoodHistory();",
+          "context": "Uses previousMoods[i].score in moodProcessor.analyzeMultiModal()"
+        },
+        "location_processor": {
+          "file": "utils/moodProcessor.js",
+          "line": 283,
+          "code": "score: stabilityScore,",
+          "context": "Returns object with 'score' property set to stabilityScore variable"
+        },
+        "impact": "Historical mood data accessed but score property might be undefined, causing invalid trend analysis",
+        "root_cause": "Variable naming confusion: 'stabilityScore' computed internally but exported as 'score'"
+      },
+      {
+        "severity": "CRITICAL",
+        "title": "Saved Data Structure Exceeds Expected Format",
+        "description": "saveMood() adds extra properties (id, timestamp) to data that already has multimodalData and metrics",
+        "location": {
+          "file": "utils/storage.js",
+          "lines": "701-703",
+          "code": "async saveMood(moodData) {\n    const history = await this.getItem('mood_history', { defaultValue: [] });\n    history.push({ ...moodData, id: Date.now().toString(), timestamp: new Date().toISOString() });",
+          "exact_structure_saved": {
+            "id": "Date.now().toString() (e.g. '1712246400000')",
+            "timestamp": "new Date().toISOString() (e.g. '2026-04-05T10:00:00.000Z')",
+            "moodKey": "string (from moodProcessor)",
+            "moodName": "string (from moodProcessor)",
+            "score": "number 0-100 (stabilityScore from moodProcessor)",
+            "color": "string hex code",
+            "recommendation": {
+              "chakra": "string",
+              "flower": "string",
+              "book": "string",
+              "affirmations": "array of strings",
+              "todos": "array of strings with emoji"
+            },
+            "metrics": {
+              "valence": "number -0.9 to 0.9",
+              "arousal": "number -0.9 to 0.9",
+              "biometricStability": "number 0-1",
+              "avgResponseTime": "number (milliseconds)",
+              "personalBias": {
+                "valence": "number",
+                "arousal": "number"
+              }
+            },
+            "timestamp_from_processor": "ISO string (DUPLICATE - set by moodProcessor.analyzeMultiModal())",
+            "details": {
+              "circadian": "number",
+              "physiological": "number",
+              "cognitive": "number",
+              "behavioral": "number",
+              "historical": "number",
+              "kalmanGain": "number"
+            },
+            "multimodalData": {
+              "textEmotions": "object {emotion: score}",
+              "facialEmotions": "object {emotion: score}",
+              "voiceEmotions": "object {emotion: score}",
+              "fusedEmotions": "object {emotion: score}",
+              "dominantEmotion": "string",
+              "confidence": "number 0-1",
+              "sources": "array"
+            }
+          }
+        },
+        "impact": "Data structure is deeply nested and complex; loading code may not handle all nested properties correctly"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "Expected Load Structure Not Fully Defined",
+        "description": "getMoodHistory() returns raw array but consumers expect specific structure with .score property",
+        "location": {
+          "file": "utils/storage.js",
+          "line": 706,
+          "code": "async getMoodHistory() { return await this.getItem('mood_history', { defaultValue: [] }); }"
+        },
+        "usage_pattern": {
+          "file": "utils/moodProcessor.js",
+          "line": 265,
+          "code": "const recentScores = previousMoods.slice(-5).map((m) => m.score || 50);",
+          "expected_structure": "Array<{ score: number, ... }>"
+        },
+        "impact": "If score property missing, defaults to 50, masking data corruption"
+      }
+    ],
+    "2_timestamp_duplication": [
+      {
+        "severity": "CRITICAL",
+        "title": "Dual Timestamp Creation",
+        "description": "Timestamp created twice: once in moodProcessor, once in storage.saveMood()",
+        "timestamp_1": {
+          "file": "utils/moodProcessor.js",
+          "line": 161,
+          "code": "timestamp: now.toISOString(),",
+          "where": "analyze() method returns timestamp",
+          "created_at": "Start of analyze() analysis cycle"
+        },
+        "timestamp_2": {
+          "file": "utils/moodProcessor.js",
+          "line": 280,
+          "additional_code": "timestamp: new Date().toISOString()",
+          "where": "analyzeMultiModal() method returns timestamp",
+          "created_at": "During multimodal fusion"
+        },
+        "timestamp_3": {
+          "file": "utils/storage.js",
+          "line": 701,
+          "code": "timestamp: new Date().toISOString(),",
+          "where": "saveMood() adds ANOTHER timestamp when persisting",
+          "created_at": "When data is written to storage (milliseconds later)"
+        },
+        "impact": "Timestamps differ by milliseconds; unclear which one represents actual mood analysis time vs persistence time",
+        "recommendation": "Use single timestamp from moodProcessor, not storage"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "Timestamp Skew Due to Async Delay",
+        "description": "Time gap between moodProcessor timestamp creation and storage.saveMood() persistence",
+        "gap": "Depends on processMoodAnalysis() execution time, typically 500-2000ms",
+        "issue": "Historical trend analysis uses wrong timestamp, causing circadian/temporal calculations to be off"
+      }
+    ],
+    "3_async_initialization_issues": [
+      {
+        "severity": "CRITICAL",
+        "title": "Storage Initialization Not Awaited",
+        "description": "AdvancedStorage.init() is async but called in constructor without await",
+        "location": {
+          "file": "utils/storage.js",
+          "line": 290,
+          "code": "this.init(); // <-- NOT AWAITED",
+          "constructor": "AdvancedStorage constructor at line 266"
+        },
+        "init_function": {
+          "file": "utils/storage.js",
+          "lines": "296-310",
+          "does": "Run migrations, start TTL cleanup, set initialized=true",
+          "problem": "May not be complete when first getItem/setItem called"
+        },
+        "impact": "Storage operations may execute before migrations complete, before cache TTL interval starts",
+        "timing_race": {
+          "created": "storage singleton instantiated in index.js during Redux store setup",
+          "first_used": "MoodScanner.processMoodAnalysis() → storage.getMoodHistory()",
+          "risk": "Depends on how long Redux setup takes (PersistGate probably waits, but unclear)"
+        }
+      },
+      {
+        "severity": "CRITICAL",
+        "title": "moodProcessor Uses localStorage in React Native",
+        "description": "moodProcessor._loadUserModel() and _saveUserModel() use browser localStorage, which doesn't exist in React Native",
+        "locations": [
+          {
+            "file": "utils/moodProcessor.js",
+            "line": 73,
+            "code": "if (this.enablePersistence && typeof localStorage !== 'undefined') {",
+            "method": "constructor"
+          },
+          {
+            "file": "utils/moodProcessor.js",
+            "line": 140,
+            "code": "if (this.enablePersistence && typeof localStorage !== 'undefined') {",
+            "method": "analyze()"
+          },
+          {
+            "file": "utils/moodProcessor.js",
+            "line": 657,
+            "code": "const data = localStorage.getItem(key);",
+            "method": "_loadUserModel()"
+          },
+          {
+            "file": "utils/moodProcessor.js",
+            "line": 683,
+            "code": "localStorage.setItem(key, JSON.stringify(model));",
+            "method": "_saveUserModel()"
+          }
+        ],
+        "impact": "User model (weights, baselines, kalman state) NEVER persists in actual app; only stored in memory for session",
+        "consequence": "Personalization is reset on app restart; learning doesn't accumulate",
+        "fix_required": "Replace localStorage with AsyncStorage or use centralized storage utility"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "processMoodAnalysis Lacks Null Checks Before Async Calls",
+        "description": "processMoodAnalysis() doesn't verify storage or moodProcessor are initialized",
+        "location": {
+          "file": "components/MoodScanner.js",
+          "lines": "489-519",
+          "code": "const previousMoods = await storage.getMoodHistory(); // could fail if storage not ready\n...\nconst analysis = await moodProcessor.analyzeMultiModal(...);"
+        },
+        "risk": "If storage initialization incomplete, getMoodHistory() might access uninitialized state"
+      }
+    ],
+    "4_property_name_mismatches": [
+      {
+        "severity": "MAJOR",
+        "title": "Stabilization Score Naming Confusion",
+        "description": "Internal variable stabilityScore becomes property score on export",
+        "variable_name": "stabilityScore",
+        "exported_as": "score",
+        "location": {
+          "file": "utils/moodProcessor.js",
+          "line": 283,
+          "code": "score: stabilityScore,"
+        },
+        "consumers_expect": "score property (correct usage)",
+        "potential_confusion": "Code readers might think 'score' is distinct from 'stabilityScore'"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "Multi-Modal Data Properties Vary in Naming",
+        "description": "Different emotion objects use different property names",
+        "inconsistencies": [
+          {
+            "source": "mapTextEmotionsToFusion() in MoodScanner.js",
+            "returns": "{ happy, sad, angry, fearful, surprised, neutral }",
+            "normalizes_from": "sentimentAnalyzer output which uses { joy, sadness, anger, fear, surprise, disgust, neutral }"
+          },
+          {
+            "source": "fuseEmotions() in MoodScanner.js",
+            "returns": "{ emotion, confidence, scores: {happy, sad, ...}, sources, ... }",
+            "note": "Different structure than raw emotion objects"
+          },
+          {
+            "source": "moodProcessor metrics.personalBias",
+            "properties": "{ valence, arousal }",
+            "vs_multimodal_data": "{ textEmotions, facialEmotions, voiceEmotions } each have emotion properties"
+          }
+        ]
+      }
+    ],
+    "5_redux_vs_storage_conflicts": [
+      {
+        "severity": "CRITICAL",
+        "title": "Redux dataSlice Not Connected to Mood Data Flow",
+        "description": "Mood data is saved directly to AsyncStorage via storage.saveMood(), not through Redux",
+        "redux_location": {
+          "file": "slices/dataSlice.js",
+          "has": "createAsyncThunk for fetchItems, addItem, updateItem, deleteItem",
+          "missing": "No mood-related reducers or thunks"
+        },
+        "direct_storage_location": {
+          "file": "components/MoodScanner.js",
+          "line": 519,
+          "code": "await storage.saveMood(analysis);"
+        },
+        "impact": "Mood data bypasses Redux entirely; not available in Redux state for other components",
+        "consequence": "Dashboard can't access mood history from Redux; must call storage.getMoodHistory() directly",
+        "consistency_issue": "Some data (user) in Redux, mood data direct to AsyncStorage; two different patterns"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "No Redux Action for Mood Analysis Results",
+        "description": "processMoodAnalysis completes but result never dispatched to Redux",
+        "should_dispatch": "setResult(analysis) sets local state only; should also dispatch Redux action",
+        "affected_components": "Any component needing current mood must use local state prop drilling or call storage directly"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "Offline Queue Configuration Doesn't Cover Mood Saves",
+        "description": "offlineSlice handles offline actions but mood saves aren't wrapped in offline queue",
+        "location": {
+          "file": "components/MoodScanner.js",
+          "line": 519,
+          "code": "await storage.saveMood(analysis);"
+        },
+        "problem": "If network down, data saved to AsyncStorage but not queued for sync; lost on next app restart if cache cleared",
+        "expected_pattern": "Should dispatch offlineSlice.enqueueAction() with mood save action"
+      }
+    ],
+    "6_import_export_inconsistencies": [
+      {
+        "severity": "LOW",
+        "title": "moodProcessor Export Inconsistency",
+        "description": "Default export is instance, named export is class; inconsistent with how it's used",
+        "location": {
+          "file": "utils/moodProcessor.js",
+          "lines": "691-692",
+          "code": "export const moodProcessor = new MoodProcessor();\nexport { MoodProcessor };"
+        },
+        "usage": {
+          "file": "components/MoodScanner.js",
+          "line": 40,
+          "code": "import { moodProcessor } from \"../utils/moodProcessor\";",
+          "uses": "Named import of default instance (correct)"
+        },
+        "potential_issue": "If multiple instances needed (e.g., per-user), must import MoodProcessor class, not default"
+      },
+      {
+        "severity": "LOW",
+        "title": "Storage Import Pattern Varies Slightly",
+        "description": "storage imported as default, but exports both AdvancedStorage class and instance",
+        "location": {
+          "file": "utils/storage.js",
+          "line": 850,
+          "code": "const storageInstance = new AdvancedStorage();\nexport default storageInstance;\nexport { AdvancedStorage, STORAGE_EVENTS };"
+        },
+        "consistency": "Fine - allows both `import storage` and `import { AdvancedStorage }`"
+      }
+    ],
+    "7_bundler_hang_root_causes": [
+      {
+        "severity": "CRITICAL",
+        "title": "Synchronous Redux Persist Initialization Blocks Metro",
+        "description": "Redux persistor created and PersistGate wraps app, but may block bundle if async operations not handled",
+        "location": {
+          "file": "index.js",
+          "lines": "68-75",
+          "code": "const persistedReducer = persistReducer(persistConfig, rootReducer);\nconst store = configureStore({...});\nconst persistor = persistStore(store);",
+          "then_later": "PersistGate loading={<PersistLoading />} persistor={persistor}"
+        },
+        "issue": "If persistConfig migration takes too long, metro bundler waits; no timeout"
+      },
+      {
+        "severity": "CRITICAL",
+        "title": "localStorage Type Check in moodProcessor Constructor",
+        "description": "Code checks `typeof localStorage !== 'undefined'` but in React Native, this check might cause bundler issues if polyfills interfere",
+        "location": {
+          "file": "utils/moodProcessor.js",
+          "line": 73,
+          "code": "if (this.enablePersistence && typeof localStorage !== 'undefined') { this._loadUserModel(); }"
+        },
+        "bundler_concern": "If bundler tries to resolve localStorage polyfill and hits circular dependency or slow module, Metro hangs"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "Storage Singleton Init() Called Without Await During Import",
+        "description": "storage.js invokes this.init() in constructor synchronously, starts async operations",
+        "location": {
+          "file": "utils/storage.js",
+          "lines": "266-291",
+          "issue": "storageInstance created and init() called immediately, but init() is async and starts intervals"
+        },
+        "bundler_hang_mechanism": "If async init() has side effects that block module resolution, metro waits"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "Possible Circular Import Between Slices and Utils",
+        "description": "offlineSlice imports persistReducer, index.js imports offlineSlice; if utils/storage imported by offlineSlice, circular",
+        "dependencies": [
+          "index.js imports slices/offlineSlice.js",
+          "slices/offlineSlice.js imports from 'redux-persist'",
+          "components/MoodScanner.js imports utils/storage.js",
+          "utils/storage.js creates singleton immediately"
+        ],
+        "risk": "Metro bundler might trace circular dependencies and hang trying to resolve module order"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "Uncontrolled RetryQueue Processing",
+        "description": "storage.processRetryQueue() uses setTimeout but doesn't have explicit timeout/cancellation for bundler",
+        "location": {
+          "file": "utils/storage.js",
+          "lines": "350-370",
+          "code": "setTimeout(() => { this.retryQueue.unshift(...); this.processRetryQueue(); }, delay);"
+        },
+        "risk": "If retryQueue has many failed operations at startup, processRetryQueue infinite loops during bundling"
+      }
+    ],
+    "8_data_consistency_and_corruption_risks": [
+      {
+        "severity": "MAJOR",
+        "title": "No Validation Before Saving Mood Data",
+        "description": "saveMood() accepts any object without schema validation",
+        "location": {
+          "file": "utils/storage.js",
+          "line": 701,
+          "code": "async saveMood(moodData) { const history = await this.getItem(...); history.push({ ...moodData, ... });"
+        },
+        "risk": "Corrupted or partial analysis object could be saved; no way to detect on load"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "History Array Unbounded Until Truncation",
+        "description": "getMoodHistory retrieves full array before slicing to 100 items on save",
+        "location": {
+          "file": "utils/storage.js",
+          "line": 702,
+          "code": "await this.setItem('mood_history', history.slice(-100)); // Keep last 100"
+        },
+        "issue": "If history corrupted or grows beyond 100, entire array loaded then sliced; memory inefficient"
+      },
+      {
+        "severity": "MAJOR",
+        "title": "Checksum Validation Doesn't Catch Schema Changes",
+        "description": "Checksum validates data integrity but not schema correctness",
+        "location": {
+          "file": "utils/storage.js",
+          "lines": "486-490",
+          "code": "const expectedChecksum = simpleHash(payload.data); if (payload.checksum !== expectedChecksum) { return defaultValue; }"
+        },
+        "scenario": "Old mood data with missing properties (e.g., multimodalData) passes checksum but fails on load"
+      }
+    ]
+  },
+  "detailed_data_structure_breakdown": {
+    "stage_1_moodscanner_captures": {
+      "file": "components/MoodScanner.js",
+      "line_range": "470-520",
+      "captured_data": {
+        "cognitiveAnswers": "Array<{ selectedIndex: number, questionIndex: number }>",
+        "biometricStability": "number (0-1)",
+        "responseTimes": "Array<number> milliseconds",
+        "textEmotions": "object {emotion: score}",
+        "facialEmotions": "object {emotion: score}",
+        "voiceEmotions": "object {emotion: score}",
+        "notes": "All captured before processMoodAnalysis() call"
+      }
+    },
+    "stage_2_moodprocessor_analyzeMultiModal": {
+      "file": "utils/moodProcessor.js",
+      "line_range": "168-304",
+      "inputs": {
+        "cognitiveAnswers": "required",
+        "biometricStability": "required",
+        "responseTimes": "required",
+        "options": {
+          "textSentiment": "number (optional, default 0)",
+          "facialScore": "number (optional, default 0)",
+          "voiceScore": "number (optional, default 0)",
+          "previousMoods": "Array (optional, default []) - CRITICAL: must have .score property"
+        }
+      },
+      "processing_steps": [
+        "Compute cognitive valence/arousal from COGNITIVE_QUESTIONS",
+        "Apply response time penalty",
+        "Apply biometric modifier",
+        "Compute historical trend boost using previousMoods.score",
+        "Multi-modal fusion with dynamic weights",
+        "Map to mood profile and compute stabilityScore",
+        "Personalize todos"
+      ],
+      "output_structure": {
+        "moodKey": "string",
+        "moodName": "string",
+        "description": "string",
+        "score": "number (0-100) MAPPED FROM stabilityScore",
+        "color": "string hex",
+        "recommendation": "object { chakra, flower, book, affirmations[], todos[] }",
+        "metrics": "object { valence, arousal, biometricStability, avgResponseTime, personalBias }",
+        "timestamp": "ISO string (CREATED HERE)",
+        "details": "object { circadian, physiological, cognitive, behavioral, historical, kalmanGain }"
+      }
+    },
+    "stage_3_moodscanner_enriches": {
+      "file": "components/MoodScanner.js",
+      "line_range": "490-520",
+      "adds_multimodal_data": {
+        "analysis.multimodalData": {
+          "textEmotions": "captured textEmotions",
+          "facialEmotions": "captured facialEmotions",
+          "voiceEmotions": "captured voiceEmotions",
+          "fusedEmotions": "fusedResult.scores",
+          "dominantEmotion": "fusedResult.emotion",
+          "confidence": "fusedResult.confidence",
+          "sources": "fusedResult.sources"
+        },
+        "note": "Added to analysis object before saving"
+      }
+    },
+    "stage_4_storage_saveMood": {
+      "file": "utils/storage.js",
+      "line_range": "700-704",
+      "receives": "analysis object from stage 3",
+      "adds": {
+        "id": "Date.now().toString()",
+        "timestamp": "new Date().toISOString() DUPLICATE OF PROCESSOR TIMESTAMP"
+      },
+      "saves_to_mood_history": {
+        "key": "mood_history (namespaced as 'moodverse:mood_history')",
+        "structure": "Array of { all previous props + id + timestamp }",
+        "keeps": "Last 100 entries"
+      }
+    },
+    "stage_5_storage_getMoodHistory": {
+      "file": "utils/storage.js",
+      "line_range": "706-707",
+      "returns": "Array<MoodEntry> (default [])",
+      "used_by": "moodProcessor.analyzeMultiModal() for trend analysis",
+      "critical_requirement": "Each entry MUST have .score property (line 265 of moodProcessor)"
+    }
+  },
+  "timeline_of_a_mood_scan": {
+    "step_1": {
+      "time": "t=0ms",
+      "what": "User initiates mood scan, MoodScanner state transitions to 'processing'",
+      "code": "components/MoodScanner.js::processMoodAnalysis() called"
+    },
+    "step_2": {
+      "time": "t=0ms",
+      "what": "Fuse emotions from three modalities",
+      "code": "fuseEmotions(textEmotions, facialEmotions, voiceEmotions)",
+      "produces": "fusedResult { emotion, confidence, scores }"
+    },
+    "step_3": {
+      "time": "t=10ms",
+      "what": "Get previous mood history from storage",
+      "code": "const previousMoods = await storage.getMoodHistory()",
+      "risk": "First async operation; getMoodHistory might fail if storage not initialized"
+    },
+    "step_4": {
+      "time": "t=50ms (depends on history size)",
+      "what": "deserializePayload extracts mood_history from encrypted/compressed storage",
+      "returns": "Array<MoodEntry>"
+    },
+    "step_5": {
+      "time": "t=100ms",
+      "what": "Call moodProcessor.analyzeMultiModal() with previousMoods",
+      "note": "previousMoods used for trend analysis; CRITICAL: must have .score property",
+      "risk": "If score property missing, trend analysis defaults to 50, masking cache corruption"
+    },
+    "step_6": {
+      "time": "t=300-500ms (process time)",
+      "what": "Processor computes stabilityScore, creates timestamp NOW",
+      "timestamp_created": "new Date().toISOString()",
+      "note": "This timestamp represents START of analysis, not when data saved"
+    },
+    "step_7": {
+      "time": "t=500-600ms",
+      "what": "MoodScanner enriches analysis with multimodalData",
+      "adds": "textEmotions, facialEmotions, voiceEmotions, fusedEmotions, dominantEmotion, etc."
+    },
+    "step_8": {
+      "time": "t=600ms",
+      "what": "Call storage.saveMood(analysis) with enriched analysis",
+      "code": "await storage.saveMood(analysis)"
+    },
+    "step_9": {
+      "time": "t=600-800ms",
+      "what": "saveMood() retrieves existing mood_history",
+      "code": "const history = await this.getItem('mood_history')",
+      "risk": "If history large (100 items), deserialization decompression takes time"
+    },
+    "step_10": {
+      "time": "t=700ms",
+      "what": "saveMood() adds ANOTHER timestamp and id to analysis",
+      "code": "history.push({ ...moodData, id: Date.now().toString(), timestamp: new Date().toISOString() })",
+      "timestamp_delta": "Timestamp now differs from processor timestamp by ~600-700ms"
+    },
+    "step_11": {
+      "time": "t=700-800ms",
+      "what": "storage.setItem() encrypts+compresses+checksums mood_history array",
+      "risk": "If compression/encryption enabled, further delays possible"
+    },
+    "step_12": {
+      "time": "t=800-900ms",
+      "what": "AsyncStorage.setItem() writes to device storage",
+      "final_timestamp_persisted": "From step 10 (approximately 700ms after analysis started)"
+    },
+    "step_13": {
+      "time": "t=900ms",
+      "what": "setResult(analysis) updates local state, UI transitions to 'result' stage",
+      "displayed_to_user": "analysis object with timestamps and multimodalData"
+    }
+  },
+  "critical_bugs_summary": [
+    {
+      "id": "BUG_001",
+      "title": "localStorage in React Native",
+      "severity": "CRITICAL - App Function Impact",
+      "affects": "User personalization (weights, baselines, kalman state)",
+      "behavior": "Code checks localStorage availability, finds none, silently fails to persist user model",
+      "consequence": "Personalization never accumulates; every app start resets to default weights",
+      "fix_effort": "2 hours - Replace localStorage with AsyncStorage in moodProcessor"
+    },
+    {
+      "id": "BUG_002",
+      "title": "Dual Timestamps",
+      "severity": "CRITICAL - Data Integrity Impact",
+      "affects": "Temporal analysis, trend calculations, circadian rhythm scoring",
+      "behavior": "Mood has timestamp from processor (when analyzed) and from storage (when saved)",
+      "consequence": "600-700ms difference causes circadian calculations to be off by actual time-of-day",
+      "fix_effort": "1 hour - Use processor timestamp only, remove storage timestamp"
+    },
+    {
+      "id": "BUG_003",
+      "title": "Storage Initialization Race Condition",
+      "severity": "CRITICAL - Potential Data Loss",
+      "affects": "All storage operations if migrations haven't run",
+      "behavior": "storage.init() is async but called without await in constructor",
+      "consequence": "If app calls getMoodHistory() before init() completes, migrations skipped",
+      "fix_effort": "2 hours - Wrap storage usage in await initialization, or use lazy init"
+    },
+    {
+      "id": "BUG_004",
+      "title": "Metadata Bloat in Saved Data",
+      "severity": "MAJOR - Performance Impact",
+      "affects": "Storage size, load time as history grows",
+      "behavior": "Each mood entry saved with full multimodalData, metrics, details, recommendation objects",
+      "consequence": "100 mood entries could exceed 1-2MB; compression helps but adds CPU overhead",
+      "fix_effort": "4 hours - Separate mood summary from detail data; store details separately"
+    },
+    {
+      "id": "BUG_005",
+      "title": "No Redux Integration for Mood Data",
+      "severity": "MAJOR - Architecture Inconsistency",
+      "affects": "Cross-component data sharing, offline queueing",
+      "behavior": "Mood data saved directly to AsyncStorage, bypasses Redux",
+      "consequence": "Offline queue doesn't cover mood saves; other components can't access via Redux",
+      "fix_effort": "6 hours - Create mood-related Redux slices, dispatch after save"
+    },
+    {
+      "id": "BUG_006",
+      "title": "No Data Validation Before Save",
+      "severity": "MAJOR - Data Quality Risk",
+      "affects": "Data integrity, ability to detect corruption",
+      "behavior": "saveMood() accepts any object without schema check",
+      "consequence": "Corrupted analysis could be saved; no way to detect on load except checksum",
+      "fix_effort": "3 hours - Add JSON schema validation for mood entries"
+    },
+    {
+      "id": "BUG_007",
+      "title": "Missing .score Property in Historical Array",
+      "severity": "MAJOR - Analysis Correctness",
+      "affects": "Trend analysis in analyzeMultiModal()",
+      "behavior": "If historical mood loaded without .score property, code defaults to 50",
+      "consequence": "Trend boost calculation incorrect; mood appears stable when it's not",
+      "fix_effort": "1 hour - Add defensive check in analyzeMultiModal(), log mismatch"
+    },
+    {
+      "id": "BUG_008",
+      "title": "Bundler Hang - Multiple Possible Causes",
+      "severity": "CRITICAL - Development Experience",
+      "affects": "Metro bundler startup time",
+      "potential_causes": [
+        "Redux persist initialization blocking",
+        "localStorage type check in moodProcessor constructor",
+        "storage.init() async operations starting during module load",
+        "Circular imports between storage/slices/components"
+      ],
+      "consequence": "Bundler hangs for 30+ seconds; developer workflow blocked",
+      "fix_effort": "8 hours - Debug with Metro logs, isolate blocking module, refactor initialization"
+    }
+  ],
+  "recommendations_by_priority": {
+    "P0_immediate": [
+      "Remove localStorage usage from moodProcessor.js; use AsyncStorage",
+      "Add await/initialization check before storage methods called in MoodScanner",
+      "Remove storage-added timestamp; use processor timestamp only",
+      "Add defensive console.log/logger.warn when score property missing from historical moods"
+    ],
+    "P1_urgent": [
+      "Create Redux mood slice; dispatch mood save action to queue instead of direct storage",
+      "Add JSON schema validation to saveMood()",
+      "Separate mood summary from detailed metrics; lazy-load on demand",
+      "Add timeout to storage initialization; fail fast if stuck"
+    ],
+    "P2_important": [
+      "Benchmark storage load time with 100 mood entries; optimize if > 500ms",
+      "Create unit tests for moodProcessor with mock historical data",
+      "Add error handling in processMoodAnalysis for storage/processor failures",
+      "Profile Metro bundler startup; identify and isolate slow modules"
+    ],
+    "P3_nice_to_have": [
+      "Implement incremental mood history loading (pagination)",
+      "Add mood data export/import functionality",
+      "Create middleware to sync mood data to cloud periodically",
+      "Implement mood data deduplication (if duplicate within 1 hour)"
+    ]
+  },
+  "file_dependency_graph": {
+    "components/MoodScanner.js": {
+      "imports_from": [
+        "utils/sentimentAnalyzer.js",
+        "utils/emotionFusion.js",
+        "utils/moodProcessor.js (CRITICAL)",
+        "utils/storage.js (CRITICAL)",
+        "constants/moodConstants.js"
+      ],
+      "critical_functions": [
+        "processMoodAnalysis()",
+        "analyzeRecordedAudio()",
+        "submitTextual()"
+      ]
+    },
+    "utils/moodProcessor.js": {
+      "imports_from": [
+        "constants/moodConstants.js",
+        "utils/logger.js"
+      ],
+      "dependencies": "NONE - no imports from other modules except constants/logger",
+      "exported_as": {
+        "named": "moodProcessor (singleton instance)",
+        "class": "MoodProcessor"
+      },
+      "issues": [
+        "Uses conditional localStorage check (React Native incompatible)",
+        "No AsyncStorage import for React Native"
+      ]
+    },
+    "utils/storage.js": {
+      "imports_from": [
+        "@react-native-async-storage/async-storage",
+        "utils/logger.js"
+      ],
+      "exported_as": {
+        "default": "storageInstance (singleton)",
+        "named": "AdvancedStorage, STORAGE_EVENTS",
+        "persist_migrate": "migrate function"
+      },
+      "issues": [
+        "Async init() not awaited in constructor",
+        "Uses setTimeout in retry logic without timeout",
+        "No connection to Redux offline queue"
+      ]
+    },
+    "index.js": {
+      "imports_from": [
+        "slices/userSlice.js",
+        "slices/offlineSlice.js (CRITICAL)",
+        "slices/dataSlice.js",
+        "hooks/useOfflineSync.js",
+        "utils/persistMigrate.js"
+      ],
+      "creates": [
+        "Redux store with persist config",
+        "PersistGate wrapper"
+      ],
+      "issues": [
+        "Potential circular import if slices import utils/storage",
+        "PersistGate loading state might not timeout"
+      ]
+    },
+    "slices/offlineSlice.js": {
+      "uses_idb": "openDB from idb library",
+      "problem": "React Native doesn't support IndexedDB; idb will fail",
+      "workaround": "Code checks window.indexedDB existence; silently fails",
+      "consequence": "Large offline queue won't persist across app restart"
+    }
+  },
+  "testing_checklist": {
+    "unit_tests": [
+      "moodProcessor.analyzeMultiModal() with empty previousMoods",
+      "moodProcessor.analyzeMultiModal() with previousMoods missing .score property",
+      "storage.saveMood() with incomplete analysis object",
+      "storage.getMoodHistory() with corrupted encrypted data",
+      "mapTextEmotionsToFusion() edge cases (null input, zero emotions)"
+    ],
+    "integration_tests": [
+      "Full mood scan flow: capture → analyze → save → load",
+      "Historical trend calculation using retrieved mood history",
+      "Offline mode: mood save attempted with no network",
+      "App restart: verify mood history persists and loads",
+      "Timestamp consistency: verify processor and storage timestamps"
+    ],
+    "performance_tests": [
+      "Load time for getMoodHistory() with 100 entries",
+      "Storage space used for 100 mood entries (expected ~1-2MB)",
+      "Compression ratio with 100 mood entries",
+      "Metro bundler startup time before/after optimizations"
+    ]
+  },
+  "references": {
+    "files_analyzed": [
+      "components/MoodScanner.js (lines 1-650+)",
+      "utils/moodProcessor.js (lines 1-692)",
+      "utils/storage.js (lines 1-850+)",
+      "slices/dataSlice.js (lines 1-100+)",
+      "slices/offlineSlice.js (lines 1-300+)",
+      "index.js (lines 1-150+)",
+      "hooks/useUserData.js (lines 1-100+)"
+    ],
+    "key_constants": {
+      "MOOD_HISTORY_KEY": "mood_history (stored as 'moodverse:mood_history')",
+      "MOOD_HISTORY_MAX_SIZE": 100,
+      "STORAGE_NAMESPACE": "moodverse",
+      "STORAGE_VERSION": 2
+    }
+  }
+}
